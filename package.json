@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-task-sync",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "Obsidian plugin that syncs vault tasks to MySQL",
 	"main": "main.js",
 	"type": "module",
