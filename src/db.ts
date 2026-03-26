@@ -44,37 +44,41 @@ export async function initTable(pool: Pool): Promise<void> {
 export async function syncTasks(pool: Pool, tasks: Task[]): Promise<{ inserted: number }> {
 	const conn = await pool.getConnection();
 	try {
-		await conn.beginTransaction();
-		await conn.execute('DELETE FROM vault_tasks');
+		// TRUNCATE resets AUTO_INCREMENT and cannot be rolled back (implicit commit),
+		// so it runs outside the transaction before INSERT begins.
+		await conn.execute('TRUNCATE TABLE vault_tasks');
 		if (tasks.length > 0) {
-			const rows = tasks.map((t) => [
-				t.filePath,
-				t.lineNumber,
-				t.rawLine,
-				t.description,
-				t.isDone ? 1 : 0,
-				t.dueDate ?? null,
-				t.scheduledDate ?? null,
-				t.startDate ?? null,
-				t.createdDate ?? null,
-				t.endTime ?? null,
-				t.priority,
-				t.recurrence ?? null,
-			]);
-			await conn.query(
-				`INSERT INTO vault_tasks
-					(file_path, line_number, raw_line, description, is_done,
-					due_date, scheduled_date, start_date, created_date, end_time,
-					priority, recurrence)
-				VALUES ?`,
-				[rows]
-			);
+			await conn.beginTransaction();
+			try {
+				const rows = tasks.map((t) => [
+					t.filePath,
+					t.lineNumber,
+					t.rawLine,
+					t.description,
+					t.isDone ? 1 : 0,
+					t.dueDate ?? null,
+					t.scheduledDate ?? null,
+					t.startDate ?? null,
+					t.createdDate ?? null,
+					t.endTime ?? null,
+					t.priority,
+					t.recurrence ?? null,
+				]);
+				await conn.query(
+					`INSERT INTO vault_tasks
+						(file_path, line_number, raw_line, description, is_done,
+						due_date, scheduled_date, start_date, created_date, end_time,
+						priority, recurrence)
+					VALUES ?`,
+					[rows]
+				);
+				await conn.commit();
+			} catch (err) {
+				await conn.rollback();
+				throw err;
+			}
 		}
-		await conn.commit();
 		return { inserted: tasks.length };
-	} catch (err) {
-		await conn.rollback();
-		throw err;
 	} finally {
 		conn.release();
 	}
