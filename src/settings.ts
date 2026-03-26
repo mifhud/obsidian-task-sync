@@ -1,6 +1,5 @@
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
 import type TaskSyncPlugin from './main';
-import { createPool, testConnection } from './db';
 
 export interface TaskSyncSettings {
 	mysqlHost: string;
@@ -110,14 +109,16 @@ export class TaskSyncSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('Test connection')
-			.setDesc('Verify MySQL connection with current settings')
+			.setName('Save & Connect')
+			.setDesc('Apply current settings and connect to MySQL')
 			.addButton((btn) =>
-				btn.setButtonText('Test Connection').onClick(async () => {
-					const pool = createPool(this.plugin.settings);
-					const ok = await testConnection(pool);
-					await pool.end();
-					new Notice(ok ? 'Connection successful!' : 'Connection failed. Check your settings.');
+				btn.setButtonText('Save & Connect').onClick(async () => {
+					try {
+						await this.plugin.connectDb();
+						new Notice('Connection successful! Database connected.');
+					} catch (err) {
+						new Notice(`Connection failed: ${(err as Error).message}`);
+					}
 				})
 			);
 
@@ -135,6 +136,7 @@ export class TaskSyncSettingTab extends PluginSettingTab {
 						if (!isNaN(minutes) && minutes > 0) {
 							this.plugin.settings.syncIntervalMinutes = minutes;
 							await this.plugin.saveSettings();
+							this.plugin.scheduleSyncInterval();
 						}
 					})
 			);

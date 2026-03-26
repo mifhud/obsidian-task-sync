@@ -8,6 +8,7 @@ export default class TaskSyncPlugin extends Plugin {
 	settings: TaskSyncSettings;
 	pool: Pool | null = null;
 	private syncing = false;
+	private syncIntervalId: number | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -62,7 +63,7 @@ export default class TaskSyncPlugin extends Plugin {
 		this.pool = pool;
 	}
 
-	async runSync() {
+	async runSync(isAutoSync = false) {
 		if (this.syncing) return;
 
 		if (!this.pool) {
@@ -71,6 +72,7 @@ export default class TaskSyncPlugin extends Plugin {
 		}
 
 		this.syncing = true;
+		const prefix = isAutoSync ? 'Task Sync (auto)' : 'Task Sync';
 		try {
 			if (!(await testConnection(this.pool))) {
 				await this.connectDb();
@@ -96,17 +98,21 @@ export default class TaskSyncPlugin extends Plugin {
 			}
 
 			const result = await syncTasks(this.pool, tasks);
-			new Notice(`Task Sync: synced ${result.inserted} tasks`);
+			new Notice(`${prefix}: synced ${result.inserted} tasks`);
 		} catch (err) {
-			new Notice(`Task Sync: sync failed — ${(err as Error).message}`);
+			new Notice(`${prefix}: sync failed — ${(err as Error).message}`);
 		} finally {
 			this.syncing = false;
 		}
 	}
 
-	private scheduleSyncInterval() {
+	scheduleSyncInterval() {
+		if (this.syncIntervalId !== null) {
+			window.clearInterval(this.syncIntervalId);
+		}
 		const ms = this.settings.syncIntervalMinutes * 60 * 1000;
-		this.registerInterval(window.setInterval(() => this.runSync(), ms));
+		this.syncIntervalId = window.setInterval(() => this.runSync(true), ms);
+		this.registerInterval(this.syncIntervalId);
 	}
 
 	async loadSettings() {
