@@ -1,36 +1,184 @@
-import {App, PluginSettingTab, Setting} from "obsidian";
-import MyPlugin from "./main";
+import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
+import type TaskSyncPlugin from './main';
+import { createPool, testConnection } from './db';
 
-export interface MyPluginSettings {
-	mySetting: string;
+export interface TaskSyncSettings {
+	mysqlHost: string;
+	mysqlPort: number;
+	mysqlUser: string;
+	mysqlPassword: string;
+	mysqlDatabase: string;
+	syncIntervalMinutes: number;
+	excludeFolders: string;
+	dataviewFormat: boolean;
+	includeScheduled: boolean;
 }
 
-export const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
-}
+export const DEFAULT_SETTINGS: TaskSyncSettings = {
+	mysqlHost: 'localhost',
+	mysqlPort: 3306,
+	mysqlUser: '',
+	mysqlPassword: '',
+	mysqlDatabase: '',
+	syncIntervalMinutes: 3,
+	excludeFolders: '.obsidian, .trash, templates, archive, archives',
+	dataviewFormat: true,
+	includeScheduled: true,
+};
 
-export class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+export class TaskSyncSettingTab extends PluginSettingTab {
+	plugin: TaskSyncPlugin;
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: TaskSyncPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
 
 	display(): void {
-		const {containerEl} = this;
-
+		const { containerEl } = this;
 		containerEl.empty();
 
+		containerEl.createEl('h2', { text: 'MySQL Connection' });
+
 		new Setting(containerEl)
-			.setName('Settings #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
+			.setName('Host')
+			.setDesc('MySQL server hostname')
+			.addText((text) =>
+				text
+					.setPlaceholder('localhost')
+					.setValue(this.plugin.settings.mysqlHost)
+					.onChange(async (value) => {
+						this.plugin.settings.mysqlHost = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName('Port')
+			.setDesc('MySQL server port')
+			.addText((text) =>
+				text
+					.setPlaceholder('3306')
+					.setValue(String(this.plugin.settings.mysqlPort))
+					.onChange(async (value) => {
+						const port = parseInt(value, 10);
+						if (!isNaN(port)) {
+							this.plugin.settings.mysqlPort = port;
+							await this.plugin.saveSettings();
+						}
+					})
+			);
+
+		new Setting(containerEl)
+			.setName('User')
+			.setDesc('MySQL username')
+			.addText((text) =>
+				text
+					.setPlaceholder('username')
+					.setValue(this.plugin.settings.mysqlUser)
+					.onChange(async (value) => {
+						this.plugin.settings.mysqlUser = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName('Password')
+			.setDesc('MySQL password')
+			.addText((text) => {
+				text
+					.setPlaceholder('password')
+					.setValue(this.plugin.settings.mysqlPassword)
+					.onChange(async (value) => {
+						this.plugin.settings.mysqlPassword = value;
+						await this.plugin.saveSettings();
+					});
+				text.inputEl.type = 'password';
+			});
+
+		new Setting(containerEl)
+			.setName('Database')
+			.setDesc('MySQL database name')
+			.addText((text) =>
+				text
+					.setPlaceholder('database')
+					.setValue(this.plugin.settings.mysqlDatabase)
+					.onChange(async (value) => {
+						this.plugin.settings.mysqlDatabase = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName('Test connection')
+			.setDesc('Verify MySQL connection with current settings')
+			.addButton((btn) =>
+				btn.setButtonText('Test Connection').onClick(async () => {
+					const pool = createPool(this.plugin.settings);
+					const ok = await testConnection(pool);
+					await pool.end();
+					new Notice(ok ? 'Connection successful!' : 'Connection failed. Check your settings.');
+				})
+			);
+
+		containerEl.createEl('h2', { text: 'Sync Settings' });
+
+		new Setting(containerEl)
+			.setName('Sync interval (minutes)')
+			.setDesc('How often to sync tasks to MySQL')
+			.addText((text) =>
+				text
+					.setPlaceholder('3')
+					.setValue(String(this.plugin.settings.syncIntervalMinutes))
+					.onChange(async (value) => {
+						const minutes = parseInt(value, 10);
+						if (!isNaN(minutes) && minutes > 0) {
+							this.plugin.settings.syncIntervalMinutes = minutes;
+							await this.plugin.saveSettings();
+						}
+					})
+			);
+
+		new Setting(containerEl)
+			.setName('Exclude folders')
+			.setDesc('Comma-separated list of folder names to exclude from scanning')
+			.addText((text) =>
+				text
+					.setPlaceholder('.obsidian, .trash, templates, archive')
+					.setValue(this.plugin.settings.excludeFolders)
+					.onChange(async (value) => {
+						this.plugin.settings.excludeFolders = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName('Dataview format')
+			.setDesc('Parse Dataview inline fields like [due:: 2024-01-01]')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.dataviewFormat).onChange(async (value) => {
+					this.plugin.settings.dataviewFormat = value;
 					await this.plugin.saveSettings();
-				}));
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Include scheduled dates')
+			.setDesc('Sync tasks with scheduled dates in addition to due dates')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.includeScheduled).onChange(async (value) => {
+					this.plugin.settings.includeScheduled = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Sync now')
+			.setDesc('Manually trigger a sync to MySQL')
+			.addButton((btn) =>
+				btn.setButtonText('Sync Now').onClick(() => {
+					this.plugin.runSync();
+				})
+			);
 	}
 }

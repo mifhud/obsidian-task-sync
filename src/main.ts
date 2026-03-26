@@ -1,99 +1,102 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import { Notice, Plugin } from 'obsidian';
+import { DEFAULT_SETTINGS, TaskSyncSettings, TaskSyncSettingTab } from './settings';
+import { parseTaskLine, shouldExclude } from './task-parser';
+import { createPool, initTable, syncTasks, Pool } from './db';
+import type { Task } from './types';
 
-// Remember to rename these classes and interfaces!
-
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class TaskSyncPlugin extends Plugin {
+	settings: TaskSyncSettings;
+	pool: Pool | null = null;
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
+		this.addSettingTab(new TaskSyncSettingTab(this.app, this));
+
+		this.addRibbonIcon('refresh-cw', 'Sync tasks to MySQL', () => {
+			this.runSync();
 		});
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
-
-		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
+			id: 'sync-now',
+			name: 'Sync tasks to MySQL now',
 			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
+				this.runSync();
+			},
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		try {
+			await this.connectDb();
+		} catch (err) {
+			new Notice(`Task Sync: failed to connect to database — ${(err as Error).message}`);
+		}
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
+		this.scheduleSyncInterval();
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
+		try {
+			await this.runSync();
+		} catch (err) {
+			new Notice(`Task Sync: initial sync failed — ${(err as Error).message}`);
+		}
 	}
 
-	onunload() {
+	async onunload() {
+		if (this.pool) {
+			this.pool.end();
+		}
+	}
+
+	async connectDb() {
+		if (this.pool) {
+			await this.pool.end();
+		}
+		this.pool = createPool(this.settings);
+		await initTable(this.pool);
+	}
+
+	async runSync() {
+		if (!this.pool) {
+			new Notice('Task Sync: database not connected');
+			return;
+		}
+
+		const files = this.app.vault.getMarkdownFiles();
+		const excludeList = this.settings.excludeFolders
+			.split(',')
+			.map((s) => s.trim())
+			.filter((s): s is string => s.length > 0);
+
+		const tasks: Task[] = [];
+		for (const file of files) {
+			if (shouldExclude(file.path, excludeList)) continue;
+			const content = await this.app.vault.cachedRead(file);
+			const lines = content.split('\n');
+			for (const [i, line] of lines.entries()) {
+				const task = parseTaskLine(line, file.path, i + 1, this.settings.dataviewFormat);
+				if (task && !task.isDone) {
+					tasks.push(task);
+				}
+			}
+		}
+
+		try {
+			const result = await syncTasks(this.pool, tasks);
+			new Notice(`Task Sync: synced ${result.inserted} tasks`);
+		} catch (err) {
+			new Notice(`Task Sync: sync failed — ${(err as Error).message}`);
+		}
+	}
+
+	private scheduleSyncInterval() {
+		const ms = this.settings.syncIntervalMinutes * 60 * 1000;
+		this.registerInterval(window.setInterval(() => this.runSync(), ms));
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<TaskSyncSettings>);
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
 	}
 }
