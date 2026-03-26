@@ -1,7 +1,7 @@
 {
 	"id": "task-sync",
 	"name": "Task Sync",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"minAppVersion": "0.15.0",
 	"description": "Scans the vault for markdown tasks and syncs them to a MySQL database.",
 	"author": "me",

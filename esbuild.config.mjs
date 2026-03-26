@@ -17,11 +17,10 @@ const context = await esbuild.context({
 	},
 	entryPoints: ["src/main.ts"],
 	bundle: true,
+	platform: "node",
 	external: [
 		"obsidian",
 		"electron",
-		"mysql2",
-		"mysql2/promise",
 		"@codemirror/autocomplete",
 		"@codemirror/collab",
 		"@codemirror/commands",
