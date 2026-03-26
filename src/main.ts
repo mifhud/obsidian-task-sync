@@ -1,12 +1,13 @@
 import { Notice, Plugin } from 'obsidian';
 import { DEFAULT_SETTINGS, TaskSyncSettings, TaskSyncSettingTab } from './settings';
 import { parseTaskLine, shouldExclude } from './task-parser';
-import { createPool, initTable, syncTasks, Pool } from './db';
+import { createPool, initTable, syncTasks, testConnection, Pool } from './db';
 import type { Task } from './types';
 
 export default class TaskSyncPlugin extends Plugin {
 	settings: TaskSyncSettings;
 	pool: Pool | null = null;
+	private syncing = false;
 
 	async onload() {
 		await this.loadSettings();
@@ -49,41 +50,57 @@ export default class TaskSyncPlugin extends Plugin {
 	async connectDb() {
 		if (this.pool) {
 			await this.pool.end();
+			this.pool = null;
 		}
-		this.pool = createPool(this.settings);
-		await initTable(this.pool);
+		const pool = createPool(this.settings);
+		try {
+			await initTable(pool);
+		} catch (err) {
+			await pool.end();
+			throw err;
+		}
+		this.pool = pool;
 	}
 
 	async runSync() {
+		if (this.syncing) return;
+
 		if (!this.pool) {
 			new Notice('Task Sync: database not connected');
 			return;
 		}
 
-		const files = this.app.vault.getMarkdownFiles();
-		const excludeList = this.settings.excludeFolders
-			.split(',')
-			.map((s) => s.trim())
-			.filter((s): s is string => s.length > 0);
+		this.syncing = true;
+		try {
+			if (!(await testConnection(this.pool))) {
+				await this.connectDb();
+			}
 
-		const tasks: Task[] = [];
-		for (const file of files) {
-			if (shouldExclude(file.path, excludeList)) continue;
-			const content = await this.app.vault.cachedRead(file);
-			const lines = content.split('\n');
-			for (const [i, line] of lines.entries()) {
-				const task = parseTaskLine(line, file.path, i + 1, this.settings.dataviewFormat);
-				if (task && !task.isDone) {
-					tasks.push(task);
+			const files = this.app.vault.getMarkdownFiles();
+			const excludeList = this.settings.excludeFolders
+				.split(',')
+				.map((s) => s.trim())
+				.filter((s): s is string => s.length > 0);
+
+			const tasks: Task[] = [];
+			for (const file of files) {
+				if (shouldExclude(file.path, excludeList)) continue;
+				const content = await this.app.vault.cachedRead(file);
+				const lines = content.split('\n');
+				for (const [i, line] of lines.entries()) {
+					const task = parseTaskLine(line, file.path, i + 1, this.settings.dataviewFormat);
+					if (task && !task.isDone) {
+						tasks.push(task);
+					}
 				}
 			}
-		}
 
-		try {
 			const result = await syncTasks(this.pool, tasks);
 			new Notice(`Task Sync: synced ${result.inserted} tasks`);
 		} catch (err) {
 			new Notice(`Task Sync: sync failed — ${(err as Error).message}`);
+		} finally {
+			this.syncing = false;
 		}
 	}
 
